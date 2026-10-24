@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from '../src/App.jsx';
 import { STORAGE_KEYS, createSampleExpenses } from '../src/data/sampleData.js';
@@ -25,6 +25,7 @@ describe('App', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   describe('localStorage initialization', () => {
@@ -59,9 +60,222 @@ describe('App', () => {
       const dashboard = screen.getByRole('region', { name: 'Dashboard' });
 
       expect(within(dashboard).getByText('₦270,000.00')).toBeInTheDocument();
-      expect(within(dashboard).getByText('Food & Dining')).toBeInTheDocument();
+      expect(within(dashboard).getAllByText('Food & Dining')).toHaveLength(2);
       expect(within(dashboard).getByText('₦85,498.98')).toBeInTheDocument();
-      expect(within(dashboard).getByText('Health & Wellness')).toBeInTheDocument();
+      expect(within(dashboard).getAllByText('Health & Wellness')).toHaveLength(2);
+    });
+
+    it('updates category and monthly insights after adding and deleting an expense', async () => {
+      const user = userEvent.setup();
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      localStorage.setItem(
+        STORAGE_KEYS.categories,
+        JSON.stringify([{ id: 'food', name: 'Food', icon: '🍽️', budget: 100 }])
+      );
+      localStorage.setItem(
+        STORAGE_KEYS.expenses,
+        JSON.stringify([
+          { id: 'base', description: 'Base expense', amount: 5, categoryId: 'food', date: toISODate(new Date()) },
+        ])
+      );
+      render(<App />);
+
+      const categoryInsights = screen.getByRole('region', { name: 'Category spending this month' });
+      const monthlyInsights = screen.getByRole('region', { name: 'Spending trend — last six months' });
+      expect(within(categoryInsights).getByText('₦5.00')).toBeInTheDocument();
+      expect(within(monthlyInsights).getByText('₦5.00')).toBeInTheDocument();
+
+      await user.type(screen.getByLabelText('Description'), 'Added lunch');
+      await user.type(screen.getByLabelText('Amount (₦)'), '12.50');
+      await user.selectOptions(screen.getByLabelText('Category'), 'food');
+      await user.click(screen.getByRole('button', { name: /add expense/i }));
+
+      expect(within(categoryInsights).getByText('₦17.50')).toBeInTheDocument();
+      expect(within(monthlyInsights).getByText('₦17.50')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Delete Added lunch' }));
+
+      expect(within(categoryInsights).getByText('₦5.00')).toBeInTheDocument();
+      expect(within(monthlyInsights).getByText('₦5.00')).toBeInTheDocument();
+    });
+
+    it('keeps displayed insights unchanged when an out-of-window expense is added and deleted', async () => {
+      const user = userEvent.setup();
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const today = new Date();
+      const outsideWindowDate = toISODate(
+        new Date(today.getFullYear(), today.getMonth() - 6, 15)
+      );
+      localStorage.setItem(
+        STORAGE_KEYS.categories,
+        JSON.stringify([{ id: 'food', name: 'Food', icon: '🍽️', budget: 100 }])
+      );
+      localStorage.setItem(
+        STORAGE_KEYS.expenses,
+        JSON.stringify([
+          {
+            id: 'current',
+            description: 'Current expense',
+            amount: 5,
+            categoryId: 'food',
+            date: toISODate(today),
+          },
+        ])
+      );
+      render(<App />);
+
+      const categoryInsights = screen.getByRole('region', { name: 'Category spending this month' });
+      const monthlyInsights = screen.getByRole('region', { name: 'Spending trend — last six months' });
+      const monthlySnapshot = () =>
+        within(monthlyInsights).getAllByRole('listitem').map((item) => item.textContent);
+      const initialMonthlySnapshot = monthlySnapshot();
+      expect(within(categoryInsights).getByText('₦5.00')).toBeInTheDocument();
+
+      await user.type(screen.getByLabelText('Description'), 'Outside window');
+      await user.type(screen.getByLabelText('Amount (₦)'), '20');
+      await user.selectOptions(screen.getByLabelText('Category'), 'food');
+      await user.clear(screen.getByLabelText('Date'));
+      await user.type(screen.getByLabelText('Date'), outsideWindowDate);
+      await user.click(screen.getByRole('button', { name: /add expense/i }));
+
+      expect(within(categoryInsights).getByText('₦5.00')).toBeInTheDocument();
+      expect(monthlySnapshot()).toEqual(initialMonthlySnapshot);
+      expect(screen.getByText('Outside window')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Delete Outside window' }));
+
+      expect(within(categoryInsights).getByText('₦5.00')).toBeInTheDocument();
+      expect(monthlySnapshot()).toEqual(initialMonthlySnapshot);
+    });
+
+    it('shows empty-state messaging and retains zero-value trend months', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 9, 23, 12));
+      localStorage.setItem(
+        STORAGE_KEYS.categories,
+        JSON.stringify([{ id: 'food', name: 'Food', icon: '🍽️', budget: 100 }])
+      );
+      localStorage.setItem(STORAGE_KEYS.expenses, JSON.stringify([]));
+      render(<App />);
+
+      const categoryInsights = screen.getByRole('region', { name: 'Category spending this month' });
+      const monthlyInsights = screen.getByRole('region', { name: 'Spending trend — last six months' });
+      expect(within(categoryInsights).getByText('No spending recorded this month.')).toBeInTheDocument();
+      expect(within(monthlyInsights).getByText('No spending recorded in the last six months.')).toBeInTheDocument();
+      expect(
+        within(monthlyInsights)
+          .getAllByRole('listitem')
+          .map((item) => within(item).getByText(/2026/).textContent)
+      ).toEqual(['May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026', 'Sept 2026', 'Oct 2026']);
+      expect(within(monthlyInsights).getAllByText('₦0.00')).toHaveLength(6);
+    });
+
+    it('shows a zero-spend category and independent empty states when only older months have spending', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 9, 23, 12));
+      localStorage.setItem(
+        STORAGE_KEYS.categories,
+        JSON.stringify([
+          { id: 'food', name: 'Food', icon: '🍽️', budget: 100 },
+          { id: 'travel', name: 'Travel', icon: '🚗', budget: 100 },
+        ])
+      );
+      localStorage.setItem(
+        STORAGE_KEYS.expenses,
+        JSON.stringify([
+          { id: 'past', description: 'September expense', amount: 25, categoryId: 'food', date: '2026-09-30' },
+        ])
+      );
+      render(<App />);
+
+      const categoryInsights = screen.getByRole('region', { name: 'Category spending this month' });
+      const monthlyInsights = screen.getByRole('region', { name: 'Spending trend — last six months' });
+
+      expect(within(categoryInsights).getByText('No spending recorded this month.')).toBeInTheDocument();
+      expect(within(categoryInsights).queryByText('Travel')).not.toBeInTheDocument();
+      expect(within(monthlyInsights).queryByText('No spending recorded in the last six months.')).not.toBeInTheDocument();
+      expect(within(monthlyInsights).getByText('Sept 2026')).toBeInTheDocument();
+      expect(within(monthlyInsights).getByText('₦25.00')).toBeInTheDocument();
+    });
+
+    it('shows every configured category amount and share when there is month-to-date spending', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 9, 23, 12));
+      localStorage.setItem(
+        STORAGE_KEYS.categories,
+        JSON.stringify([
+          { id: 'food', name: 'Food', icon: '🍽️', budget: 100 },
+          { id: 'travel', name: 'Travel', icon: '🚗', budget: 100 },
+        ])
+      );
+      localStorage.setItem(
+        STORAGE_KEYS.expenses,
+        JSON.stringify([
+          { id: 'food-expense', description: 'Lunch', amount: 25, categoryId: 'food', date: '2026-10-01' },
+        ])
+      );
+      render(<App />);
+
+      const categoryInsights = screen.getByRole('region', { name: 'Category spending this month' });
+      expect(within(categoryInsights).getByText('Food')).toBeInTheDocument();
+      expect(within(categoryInsights).getByText('Travel')).toBeInTheDocument();
+      expect(within(categoryInsights).getByText('₦25.00')).toBeInTheDocument();
+      expect(within(categoryInsights).getByText('₦0.00')).toBeInTheDocument();
+      expect(within(categoryInsights).getByText('100% of spending')).toBeInTheDocument();
+      expect(within(categoryInsights).getByText('0% of spending')).toBeInTheDocument();
+    });
+
+    it('includes unknown categories and displays very large finite amounts', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 9, 23, 12));
+      localStorage.setItem(
+        STORAGE_KEYS.categories,
+        JSON.stringify([{ id: 'food', name: 'Food', icon: '🍽️', budget: 100 }])
+      );
+      localStorage.setItem(
+        STORAGE_KEYS.expenses,
+        JSON.stringify([
+          { id: 'unknown', description: 'Unknown category', amount: 1e308, categoryId: 'removed', date: '2026-10-23' },
+        ])
+      );
+      render(<App />);
+
+      const categoryInsights = screen.getByRole('region', { name: 'Category spending this month' });
+      expect(within(categoryInsights).getByText('Uncategorized')).toBeInTheDocument();
+      expect(within(categoryInsights).getByText('100% of spending')).toBeInTheDocument();
+      expect(within(categoryInsights).getByText((content) => content.startsWith('₦100,000'))).toBeInTheDocument();
+    });
+
+    it('refreshes the date windows at local midnight and clears its timer on unmount', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 9, 31, 23, 59, 59));
+      localStorage.setItem(
+        STORAGE_KEYS.categories,
+        JSON.stringify([{ id: 'food', name: 'Food', icon: '🍽️', budget: 100 }])
+      );
+      localStorage.setItem(
+        STORAGE_KEYS.expenses,
+        JSON.stringify([
+          { id: 'october', description: 'October expense', amount: 15, categoryId: 'food', date: '2026-10-31' },
+          { id: 'november', description: 'November expense', amount: 25, categoryId: 'food', date: '2026-11-01' },
+        ])
+      );
+      const { unmount } = render(<App />);
+      const categoryInsights = screen.getByRole('region', { name: 'Category spending this month' });
+      const monthlyInsights = screen.getByRole('region', { name: 'Spending trend — last six months' });
+
+      expect(within(categoryInsights).getByText('₦15.00')).toBeInTheDocument();
+      expect(within(monthlyInsights).queryByText('Nov 2026')).not.toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1100);
+      });
+
+      expect(within(categoryInsights).getByText('₦25.00')).toBeInTheDocument();
+      expect(within(monthlyInsights).getByText('Nov 2026')).toBeInTheDocument();
+      expect(vi.getTimerCount()).toBe(1);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 
@@ -168,6 +382,139 @@ describe('App', () => {
   });
 
   describe('category budgets', () => {
+    it('shows the warning at exactly 80% and the alert at exactly 100%', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.categories,
+        JSON.stringify([
+          { id: 'warning', name: 'Warning Category', icon: '⚠️', budget: 100 },
+          { id: 'alert', name: 'Alert Category', icon: '🚨', budget: 100 },
+        ])
+      );
+      localStorage.setItem(
+        STORAGE_KEYS.expenses,
+        JSON.stringify([
+          { id: 'warning-expense', amount: 80, categoryId: 'warning', date: '2026-01-01' },
+          { id: 'alert-expense', amount: 100, categoryId: 'alert', date: '2026-01-01' },
+        ])
+      );
+      render(<App />);
+
+      const warningRow = getCategoryRow('Warning Category');
+      expect(within(warningRow).getByRole('status')).toHaveTextContent('Approaching budget');
+      expect(within(warningRow).getByRole('progressbar')).toHaveAttribute(
+        'aria-valuetext',
+        '80% of budget used'
+      );
+
+      const alertRow = getCategoryRow('Alert Category');
+      expect(within(alertRow).getByRole('alert')).toHaveTextContent('Over budget');
+      expect(within(alertRow).getByRole('progressbar')).toHaveAttribute(
+        'aria-valuetext',
+        '100% of budget used'
+      );
+    });
+
+    it('shows live budget progress and threshold alerts', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      const shopping = getCategoryRow('Shopping');
+      expect(within(shopping).getByRole('alert')).toHaveTextContent('Over budget');
+      expect(within(shopping).getByRole('progressbar')).toHaveAttribute(
+        'aria-valuetext',
+        '109% of budget used'
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Edit budget for Transportation' }));
+      const input = screen.getByLabelText('Allocated budget for Transportation');
+      await user.clear(input);
+      await user.type(input, '27000');
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      expect(within(getCategoryRow('Transportation')).getByRole('status')).toHaveTextContent(
+        'Approaching budget'
+      );
+    });
+
+    it('transfers only unspent budget and updates both category budgets', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      await user.selectOptions(screen.getByLabelText('From category'), 'transportation');
+      expect(screen.getByText('Available to move: ₦28,017.05')).toBeInTheDocument();
+      await user.selectOptions(screen.getByLabelText('To category'), 'food');
+      await user.type(screen.getByLabelText('Transfer amount (₦)'), '1000');
+      await user.click(screen.getByRole('button', { name: 'Transfer funds' }));
+
+      expect(within(getCategoryRow('Transportation')).getByText('₦49,000.00')).toBeInTheDocument();
+      expect(within(getCategoryRow('Food & Dining')).getByText('₦101,000.00')).toBeInTheDocument();
+      expect(screen.getByText('₦270,000.00')).toBeInTheDocument();
+      expect(screen.getByText('Transferred ₦1,000.00 from Transportation to Food & Dining.')).toBeInTheDocument();
+      expect(readStorage(STORAGE_KEYS.categories).find((category) => category.id === 'transportation').budget)
+        .toBe(49000);
+    });
+
+    it('rejects transfers larger than the source category’s unspent budget', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      await user.selectOptions(screen.getByLabelText('From category'), 'transportation');
+      await user.selectOptions(screen.getByLabelText('To category'), 'food');
+      await user.type(screen.getByLabelText('Transfer amount (₦)'), '999999');
+      await user.click(screen.getByRole('button', { name: 'Transfer funds' }));
+
+      expect(screen.getByText(/no more than the source category’s available funds/)).toBeInTheDocument();
+      expect(readStorage(STORAGE_KEYS.categories).find((category) => category.id === 'transportation').budget)
+        .toBe(50000);
+    });
+
+    it('rejects transfers to the same category without changing budgets', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      await user.selectOptions(screen.getByLabelText('From category'), 'transportation');
+      await user.selectOptions(screen.getByLabelText('To category'), 'transportation');
+      await user.type(screen.getByLabelText('Transfer amount (₦)'), '100');
+      await user.click(screen.getByRole('button', { name: 'Transfer funds' }));
+
+      expect(screen.getByText('Choose different source and destination categories.')).toBeInTheDocument();
+      expect(readStorage(STORAGE_KEYS.categories).find((category) => category.id === 'transportation').budget)
+        .toBe(50000);
+    });
+
+    it.each(['-1', '0', '0.001', ''])(
+      'rejects transfer amount %j without changing budgets',
+      async (amount) => {
+        const user = userEvent.setup();
+        render(<App />);
+
+        await user.selectOptions(screen.getByLabelText('From category'), 'transportation');
+        await user.selectOptions(screen.getByLabelText('To category'), 'food');
+        const amountInput = screen.getByLabelText('Transfer amount (₦)');
+        if (amount) {
+          await user.type(amountInput, amount);
+        }
+        await user.click(screen.getByRole('button', { name: 'Transfer funds' }));
+
+        expect(
+          screen.getByText(
+            'Enter an amount greater than 0 and no more than the source category’s available funds.'
+          )
+        ).toBeInTheDocument();
+        expect(readStorage(STORAGE_KEYS.categories).find((category) => category.id === 'transportation').budget)
+          .toBe(50000);
+      }
+    );
+
+    it('does not offer an over-budget category as a transfer source', () => {
+      render(<App />);
+
+      const sourceSelect = screen.getByLabelText('From category');
+      expect(within(sourceSelect).queryByRole('option', { name: 'Shopping' })).not.toBeInTheDocument();
+      expect(readStorage(STORAGE_KEYS.categories).find((category) => category.id === 'shopping').budget)
+        .toBe(30000);
+    });
+
     it('updates a category budget and saves it', async () => {
       const user = userEvent.setup();
       render(<App />);
@@ -198,7 +545,7 @@ describe('App', () => {
       await user.type(input, '-5');
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
-      expect(screen.getByRole('alert')).toHaveTextContent('Budget must be a number of 0 or more.');
+      expect(screen.getByText('Budget must be a number of 0 or more.')).toBeInTheDocument();
       expect(readStorage(STORAGE_KEYS.categories).find((c) => c.id === 'shopping').budget).toBe(30000);
     });
 
