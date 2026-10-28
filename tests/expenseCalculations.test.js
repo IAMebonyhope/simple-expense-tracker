@@ -3,7 +3,15 @@ import {
   calculateCategoryRemaining,
   calculateCategorySpent,
   calculateTotalBudget,
+  filterExpensesByDateRange,
+  getCategorySpending,
+  getDateRange,
   getCategorySummaries,
+  getPreviousPeriodRange,
+  getSpendingComparison,
+  getSpendingMetrics,
+  getTimeBucketKey,
+  getTimeSeriesData,
   roundToCents,
   sortExpensesByCategory,
   sortExpensesByDate,
@@ -129,6 +137,139 @@ describe('roundToCents', () => {
   it('rounds to two decimal places', () => {
     expect(roundToCents(1.005 + 2.001)).toBe(3.01);
     expect(roundToCents(0.1 + 0.2)).toBe(0.3);
+  });
+
+  describe('spending insights calculations', () => {
+    const insightCategories = [
+      { id: 'food', name: 'Food', icon: '🍽️', budget: 100 },
+      { id: 'fun', name: 'Fun', icon: '🎬', budget: 50 },
+    ];
+    const insightExpenses = [
+      { id: 'a', amount: 10, categoryId: 'food', date: '2026-10-01' },
+      { id: 'b', amount: 5.25, categoryId: 'food', date: '2026-10-01' },
+      { id: 'c', amount: 20, categoryId: 'fun', date: '2026-10-03' },
+      { id: 'invalid', amount: 'not-money', categoryId: 'food', date: '2026-10-03' },
+      { id: 'unknown', amount: 100, categoryId: 'missing', date: '2026-10-03' },
+    ];
+    const range = {
+      start: new Date(2026, 9, 1),
+      end: new Date(2026, 9, 3),
+    };
+
+    it('creates inclusive ranges and filters invalid records', () => {
+      expect(getDateRange('7d', new Date(2026, 9, 10))).toEqual({
+        start: new Date(2026, 9, 4),
+        end: new Date(2026, 9, 10),
+      });
+      expect(filterExpensesByDateRange(insightExpenses, range).map((expense) => expense.id)).toEqual([
+        'a',
+        'b',
+        'c',
+        'unknown',
+      ]);
+    });
+
+    it('calculates category totals, counts, percentages, and zero categories', () => {
+      expect(getCategorySpending(insightExpenses, insightCategories, ['food', 'fun'], range)).toEqual([
+        {
+          ...insightCategories[1],
+          spent: 20,
+          expenseCount: 1,
+          percentage: 56.74,
+        },
+        {
+          ...insightCategories[0],
+          spent: 15.25,
+          expenseCount: 2,
+          percentage: 43.26,
+        },
+      ]);
+
+      expect(getCategorySpending([], insightCategories, ['food'], range)[0]).toMatchObject({
+        spent: 0,
+        expenseCount: 0,
+        percentage: 0,
+      });
+    });
+
+    it('uses daily, weekly, and monthly bucket keys', () => {
+      expect(getTimeBucketKey('2026-10-07', 'day')).toBe('2026-10-07');
+      expect(getTimeBucketKey('2026-10-07', 'week')).toBe('2026-10-05');
+      expect(getTimeBucketKey('2026-10-07', 'month')).toBe('2026-10-01');
+    });
+
+    it('creates chronological zero-filled category series and totals', () => {
+      const result = getTimeSeriesData(
+        insightExpenses,
+        insightCategories,
+        ['food', 'fun'],
+        range,
+        '30d'
+      );
+
+      expect(result.granularity).toBe('day');
+      expect(result.buckets.map((bucket) => bucket.key)).toEqual([
+        '2026-10-01',
+        '2026-10-02',
+        '2026-10-03',
+      ]);
+      expect(result.buckets[1]).toMatchObject({
+        values: { food: 0, fun: 0 },
+        total: 0,
+      });
+      expect(result.series.map((series) => series.values)).toEqual([
+        [15.25, 0, 0],
+        [0, 0, 20],
+      ]);
+      expect(result.total).toBe(35.25);
+    });
+
+    it('selects period granularity and calculates metrics', () => {
+      const weekly = getTimeSeriesData(
+        insightExpenses,
+        insightCategories,
+        ['food'],
+        range,
+        '90d'
+      );
+      const monthly = getTimeSeriesData(
+        insightExpenses,
+        insightCategories,
+        ['food'],
+        range,
+        'all'
+      );
+      expect(weekly.granularity).toBe('week');
+      expect(monthly.granularity).toBe('month');
+
+      const metrics = getSpendingMetrics(
+        getTimeSeriesData(insightExpenses, insightCategories, ['food', 'fun'], range, '30d'),
+        getCategorySpending(insightExpenses, insightCategories, ['food', 'fun'], range)
+      );
+      expect(metrics).toMatchObject({
+        total: 35.25,
+        averagePerBucket: 11.75,
+        highestCategory: { id: 'fun' },
+        highestBucket: { key: '2026-10-03', total: 20 },
+      });
+    });
+
+    it('calculates previous ranges and comparisons', () => {
+      expect(getPreviousPeriodRange(range, '30d')).toEqual({
+        start: new Date(2026, 8, 28),
+        end: new Date(2026, 8, 30),
+      });
+      expect(getPreviousPeriodRange(range, 'all')).toBeNull();
+      expect(getSpendingComparison(120, 100)).toEqual({
+        amountChange: 20,
+        percentageChange: 20,
+      });
+      expect(getSpendingComparison(20, 0)).toEqual({
+        amountChange: 20,
+        percentageChange: null,
+      });
+      expect(getSpendingComparison(20, null)).toBeNull();
+    });
   });
 });
 

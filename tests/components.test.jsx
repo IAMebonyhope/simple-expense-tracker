@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from '../src/App.jsx';
 import { STORAGE_KEYS, createSampleExpenses } from '../src/data/sampleData.js';
@@ -62,6 +62,39 @@ describe('App', () => {
       expect(within(dashboard).getByText('Food & Dining')).toBeInTheDocument();
       expect(within(dashboard).getByText('₦85,498.98')).toBeInTheDocument();
       expect(within(dashboard).getByText('Health & Wellness')).toBeInTheDocument();
+    });
+  });
+
+  describe('spending insights', () => {
+    it('shows custom date controls and preserves a readable empty state when no date range matches', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      await user.selectOptions(screen.getByLabelText('Time period'), 'Custom range');
+      const start = screen.getByLabelText('From');
+      const end = screen.getByLabelText('To');
+
+      expect(start).toBeInTheDocument();
+      expect(end).toBeInTheDocument();
+
+      const futureStart = new Date(2030, 0, 1);
+      const futureEnd = new Date(2030, 0, 5);
+
+      fireEvent.change(start, { target: { value: toISODate(futureStart) } });
+      fireEvent.change(end, { target: { value: toISODate(futureEnd) } });
+
+      expect(
+        await screen.findByText(/No valid expenses found for the selected period and categories/i)
+      ).toBeInTheDocument();
+    });
+
+    it('allows the user to clear all categories and shows the empty selection state', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Clear all' }));
+
+      expect(screen.getByText('Select at least one category to compare spending patterns.')).toBeInTheDocument();
     });
   });
 

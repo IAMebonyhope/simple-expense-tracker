@@ -76,11 +76,14 @@ The **regression test** lives in `tests/regression/` and runs separately:
 npm run test:bug
 ```
 
-In the starter project this test **is expected to fail**. You will use it in the debugging exercise. Once the issue is fixed, it should pass, and `npm test` should still pass too.
+The regression suite verifies that same-day expense records are all included
+in totals and that the dashboard remains consistent with the calculation
+helpers. It should pass alongside `npm test`.
 
 ## Features
 
 - **Dashboard**: total allocated budget, total expenses, remaining balance, and a breakdown of spending by category.
+- **Spending insights**: compare spending by category and over time using preset or custom date ranges, with multiple categories supported in the same chart.
 - **Category budgets**: six categories, each with an allocated budget, the amount spent, and the remaining balance. Click **Edit** to change a category's budget. The remaining balance can go negative when you overspend.
 - **Add expenses**: enter a description, amount, category, and date. The form checks that every field is valid.
 - **View expenses**: all expenses are listed newest first. Use the **Sort** menu to show oldest first, or to group them by category.
@@ -121,6 +124,11 @@ If the page ever fails to load, you can also clear the data manually. Open your 
 │   ├── components/
 │   │   ├── Header.jsx          # App title and subtitle
 │   │   ├── Dashboard.jsx       # Summary cards + spending breakdown
+│   │   ├── SpendingInsights.jsx # Insight filters and chart layout
+│   │   ├── CategorySpendingChart.jsx # Category comparison chart
+│   │   ├── SpendingTrendChart.jsx # Spending-over-time chart
+│   │   ├── ChartLegend.jsx      # Accessible series legend
+│   │   ├── ChartDataTable.jsx   # Keyboard-readable chart data
 │   │   ├── SummaryCard.jsx     # One summary statistic card
 │   │   ├── CategoryBudgets.jsx # Category table with budget editing
 │   │   ├── ExpenseForm.jsx     # Add-expense form with validation
@@ -129,8 +137,9 @@ If the page ever fails to load, you can also clear the data manually. Open your 
 │   │   └── sampleData.js       # Default categories, sample expenses, storage keys
 │   ├── hooks/
 │   │   └── useLocalStorage.js  # useState that also saves to localStorage
+│   │   └── useSpendingInsights.js # Derived insight filters and chart data
 │   └── utils/
-│       ├── expenseCalculations.js # Totals, per-category spending, sorting
+│       ├── expenseCalculations.js # Totals, insight aggregations, sorting
 │       └── formatters.js       # Currency and date helpers
 ├── tests/
 │   ├── setup.js                # Test setup (jest-dom matchers, cleanup)
@@ -140,6 +149,20 @@ If the page ever fails to load, you can also clear the data manually. Open your 
 ├── vite.config.js              # Vite + Vitest configuration
 └── vitest.regression.config.js # Vitest config for the regression test
 ```
+
+### Spending insights
+
+The **Spending Insights** section appears after the dashboard. Select `Last 7
+days`, `Last 30 days`, `Last 90 days`, `All time`, or `Custom range`, then
+choose one or more categories. The category chart shows sorted totals and the
+trend chart shows zero-filled daily, weekly, or monthly buckets. Multiple
+selected categories are drawn together with a labelled total series.
+
+Each chart includes a text summary, visible legend, and expandable data table
+so values do not depend on color, hover, or SVG rendering alone. Invalid local
+records are excluded from insight calculations rather than being allowed to
+produce broken chart scales. Insight filters are temporary view state and are
+not saved to `localStorage`.
 
 ### How data flows
 
